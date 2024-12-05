@@ -1,80 +1,112 @@
+import streamlit as st
 import pytesseract
 from pdf2image import convert_from_path
 from PIL import Image
+import tempfile
 import os
+import shutil
 
-# Define explicitamente o caminho para o executável do Tesseract
-pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
+# Detecta automaticamente o caminho do executável do Tesseract
+tesseract_path = shutil.which('tesseract')
+if tesseract_path is not None:
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+else:
+    st.error('O Tesseract OCR não foi encontrado em seu sistema. Por favor, instale o Tesseract e certifique-se de que ele está no PATH do sistema.')
+    st.stop()
 
+# Configuração da página
+st.set_page_config(page_title="Extração de Texto via OCR",
+                   page_icon="📄", layout="wide")
 
-def process_pdf(pdf_path):
-    """
-    Extrai texto de um PDF usando OCR.
-    """
-    try:
-        pages = convert_from_path(pdf_path)
-        return "\n".join(
-            f"--- Página {i +
-                          1} ---\n{pytesseract.image_to_string(page, lang='por')}"
-            for i, page in enumerate(pages)
-        )
-    except Exception as e:
-        print(f"Erro ao processar PDF {pdf_path}: {e}")
-        return ""
+# Título e descrição
+st.title("📄 Extração de Texto via OCR")
+st.markdown("""
+Bem-vindo à aplicação de extração de texto via OCR! Faça upload de imagens ou PDFs, e o sistema irá extrair o texto contido neles.
+""")
 
+# Seleção de idioma para o OCR
+st.sidebar.header("Configurações")
+languages = {'Português': 'por', 'Inglês': 'eng',
+             'Espanhol': 'spa', 'Francês': 'fra', 'Alemão': 'deu'}
+language = st.sidebar.selectbox(
+    "Selecione o idioma para OCR", list(languages.keys()), index=0)
+lang_code = languages[language]
 
-def process_image(image_path):
-    """
-    Extrai texto de uma imagem usando OCR.
-    """
-    try:
-        img = Image.open(image_path)
-        return pytesseract.image_to_string(img, lang='por')
-    except Exception as e:
-        print(f"Erro ao processar imagem {image_path}: {e}")
-        return ""
+# Upload de arquivos
+st.sidebar.header("Upload de Arquivos")
+uploaded_files = st.sidebar.file_uploader(
+    "Carregue suas imagens ou PDFs",
+    type=['png', 'jpg', 'jpeg', 'pdf'],
+    accept_multiple_files=True
+)
 
-
-def process_files_in_folder(folder_path):
-    """
-    Itera sobre todos os arquivos da pasta, processa PDFs e imagens,
-    e salva os textos extraídos em arquivos separados.
-    """
-    if not os.path.exists(folder_path):
-        print(f"Pasta '{folder_path}' não encontrada!")
-        return
-
-    output_folder = os.path.join(folder_path, "extracted_text")
-    os.makedirs(output_folder, exist_ok=True)
-
-    for filename in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, filename)
-
-        if os.path.isfile(file_path):
-            print(f"Processando arquivo: {filename}")
-            ext = filename.lower().split('.')[-1]
-
-            if ext in ['pdf', 'png', 'jpg', 'jpeg']:
-                try:
-                    if ext == 'pdf':
-                        text = process_pdf(file_path)
-                    else:
-                        text = process_image(file_path)
-
-                    output_file = os.path.join(
-                        output_folder, f"{filename}.txt")
-                    with open(output_file, "w", encoding="utf-8") as f:
-                        f.write(text)
-                    print(f"Texto extraído salvo em: {output_file}")
-
-                except Exception as e:
-                    print(f"Erro ao processar {filename}: {e}")
-            else:
-                print(f"Formato não suportado: {filename}")
+# Função para processar PDFs
 
 
-# Defina o caminho da pasta com os arquivos
-folder_to_scan = './docs_to_scan'
+def process_pdf(file_path):
+    images = convert_from_path(file_path)
+    text = ""
+    for i, image in enumerate(images):
+        page_text = pytesseract.image_to_string(image, lang=lang_code)
+        text += f"--- Página {i+1} ---\n{page_text}\n"
+    return text
 
-# Processa os arquivos na pasta
-process_files_in_folder(folder_to_scan)
+# Função para processar imagens
+
+
+def process_image(image):
+    text = pytesseract.image_to_string(image, lang=lang_code)
+    return text
+
+
+# Processamento dos arquivos carregados
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        st.subheader(f"Arquivo: {uploaded_file.name}")
+        # Salva o arquivo temporariamente
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            temp_file.write(uploaded_file.read())
+            temp_filename = temp_file.name
+
+        file_ext = os.path.splitext(uploaded_file.name)[1].lower()
+
+        if file_ext == '.pdf':
+            try:
+                with st.spinner('Processando PDF...'):
+                    text = process_pdf(temp_filename)
+                st.success('Processamento concluído!')
+                with st.expander("Visualizar Texto Extraído"):
+                    st.text_area("Texto Extraído", text, height=300)
+                st.download_button(
+                    label="📥 Baixar Texto",
+                    data=text,
+                    file_name=f"{uploaded_file.name}.txt",
+                    mime="text/plain"
+                )
+            except Exception as e:
+                st.error(f"Erro ao processar o PDF: {e}")
+        elif file_ext in ['.png', '.jpg', '.jpeg']:
+            try:
+                image = Image.open(temp_filename)
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.image(image, caption='Imagem Carregada',
+                             use_container_width=True)
+                with col2:
+                    with st.spinner('Processando Imagem...'):
+                        text = process_image(image)
+                    st.success('Processamento concluído!')
+                    st.text_area("Texto Extraído", text, height=300)
+                    st.download_button(
+                        label="📥 Baixar Texto",
+                        data=text,
+                        file_name=f"{uploaded_file.name}.txt",
+                        mime="text/plain"
+                    )
+            except Exception as e:
+                st.error(f"Erro ao processar a imagem: {e}")
+        else:
+            st.warning("Formato de arquivo não suportado.")
+
+        # Remove o arquivo temporário
+        os.unlink(temp_filename)
